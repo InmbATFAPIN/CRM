@@ -195,7 +195,7 @@ label.f textarea{resize:vertical;min-height:58px}
   <div class="cuenta"><span id="quien"></span><button id="salir">Salir</button><span id="ver"></span></div>
   <nav class="mods" id="mods" aria-label="Módulos">
     <button data-m="hoy">Hoy</button><button data-m="social">Social</button><button data-m="finanzas">Finanzas</button>
-    <button data-m="tiempo">Tiempo</button><button data-m="vida">Vida</button><button data-m="consejo">Consejo</button>
+    <button data-m="tiempo">Tiempo</button><button data-m="vida">Vida</button><button data-m="comida">Comida</button><button data-m="consejo">Consejo</button>
   </nav>
   <div id="main"></div>
 </div>
@@ -208,7 +208,7 @@ label.f textarea{resize:vertical;min-height:58px}
    Una sola fuente: Firestore.  users/{uid}/data/{coleccion} = {items:[...], updated}
    Sin datos sembrados en el código (solo catálogos editables) ni copia propia en localStorage.
    ============================================================ */
-const VERSION = "3.0";
+const VERSION = "3.1";
 const SCHEMA = 1;
 
 /* ▼▼▼ CONFIGURACIÓN DE FIREBASE: si usas otro proyecto, reemplaza este bloque ▼▼▼ */
@@ -222,7 +222,7 @@ const firebaseConfig = {
 };
 /* ▲▲▲ ------------------------------------------------------------------- ▲▲▲ */
 
-const KEYS = ["contactos","grupos","bloques","tipos","pendientes","dias","suplementos",
+const KEYS = ["contactos","grupos","bloques","tipos","pendientes","dias","suplementos","comidas","compras",
   "cuentas","movimientos","presupuesto","deudas","metas","suscripciones",
   "hogar","coches","kerry","salud","woops","proyectos","ideas","publicaciones","reportes","config"];
 const DB = {}; KEYS.forEach(k => DB[k] = []);
@@ -238,7 +238,18 @@ const DEF = {
   hogar: [{id:"h1",nombre:"Lavar trastes",freq:"diario"},{id:"h2",nombre:"Sacar la basura",freq:"diario"},
     {id:"h3",nombre:"Subir el garrafón",freq:"cada",cada:3,ultimo:""},{id:"h4",nombre:"Limpiar cocina, tarja, mesa y refri",freq:"cada",cada:7,ultimo:""},
     {id:"h5",nombre:"Lavandería",freq:"semana",veces:2}],
-  woops: [{id:"1",nombre:"Oficina Familiar",nota:""},{id:"2",nombre:"Cuerpo y mente",nota:""},{id:"3",nombre:"Red e identidad",nota:""},{id:"4",nombre:"Vida autónoma",nota:""}]
+  woops: [{id:"1",nombre:"Oficina Familiar",nota:""},{id:"2",nombre:"Cuerpo y mente",nota:""},{id:"3",nombre:"Red e identidad",nota:""},{id:"4",nombre:"Vida autónoma",nota:""}],
+  comidas: [
+    {id:"D1",t:"D",nombre:"Huevos revueltos + pan integral + leche",prot:30,kcal:480},{id:"D2",t:"D",nombre:"Avena con leche, plátano y nueces",prot:20,kcal:420},
+    {id:"D3",t:"D",nombre:"Licuado proteico",prot:28,kcal:500},{id:"D4",t:"D",nombre:"Quesadillas + huevo + frijoles",prot:35,kcal:520},
+    {id:"L1",t:"L",nombre:"Arroz + pollo al limón + verduras",prot:45,kcal:600},{id:"L2",t:"L",nombre:"Ensalada de atún + frijoles + tostadas",prot:38,kcal:520},
+    {id:"L3",t:"L",nombre:"Pasta integral + atún + tomate",prot:35,kcal:580},{id:"L4",t:"L",nombre:"Sopa de lentejas + pan integral",prot:28,kcal:500},
+    {id:"C1",t:"C",nombre:"Atún + pan integral + yogur",prot:45,kcal:450},{id:"C2",t:"C",nombre:"Huevos estrellados + arroz + frijoles",prot:32,kcal:520},
+    {id:"C3",t:"C",nombre:"Sardinas + tostadas + aguacate",prot:35,kcal:480},{id:"C4",t:"C",nombre:"Yogur griego + nueces + avena",prot:20,kcal:380}],
+  compras: [["Huevos 30 pz","Tres B",110],["Pechuga de pollo 1 kg","Tres B",90],["Leche 2 L","Tres B",50],["Avena 1 kg","Tres B",35],["Arroz 1 kg","Tres B",25],["Tortillas 1 kg","Tres B",25],
+    ["Atún en lata x6","Aurrera",90],["Yogur griego x4","Aurrera",80],["Pan integral","Aurrera",45],["Pasta integral","Aurrera",30],["Sardinas x3","Aurrera",45],
+    ["Nueces 200 g","Aurrera",60],["Aguacate x3","Aurrera",40],["Verduras","Aurrera",35],["Plátanos 1 kg","Aurrera",20],["Frijoles","Aurrera",30]]
+    .map((x,i) => ({id:"cp"+i,nombre:x[0],tienda:x[1],precio:x[2],ok:false}))
 };
 const ESTATUS = ["amigo","conocido","distanciado","tutor","pausa"];
 const ESTATUS_ETQ = {amigo:"amigo",conocido:"conocido",distanciado:"distanciado",tutor:"tutor",pausa:"pausa por decisión propia"};
@@ -879,6 +890,77 @@ function alertas(){
     XLSX.writeFile(wb, "finanzas_" + hoy() + ".xlsx");
   }
   MOD.finanzas = {monta, pinta:pintaF};
+})();
+
+/* ---------------- COMIDA (banco, plan semanal, compras) ---------------- */
+(function(){
+  let sub = "dia"; const META_P = 150, META_K = 2300, T = {D:"Desayuno",L:"Comida",C:"Cena"};
+  const com = id => G("comidas").find(c => c.id === id);
+  const lunes = () => mas(fecha, -((fechaDe(fecha).getDay() + 6) % 7));
+  function monta(){
+    $("main").innerHTML = segHTML("cSeg",[["dia","Día"],["sem","Semana"],["banco","Banco"],["compras","Compras"]],sub) + '<div id="cv" class="col"></div>';
+    $("cSeg").onclick = e => { const b = e.target.closest("[data-v]"); if (!b) return; sub = b.dataset.v; document.querySelectorAll("#cSeg button").forEach(x => x.setAttribute("aria-pressed", x === b)); pintaC(); };
+    $("cv").onclick = clicC; $("cv").onchange = cambioC;
+  }
+  function pintaC(){ if (!$("cv")) return; ({dia:vDia, sem:vSem, banco:vBanco, compras:vCompras})[sub](); }
+  function vDia(){
+    const d = diaDe(fecha), c = d.com || {}; let p = 0, k = 0;
+    ["D","L","C"].forEach(t => { const x = com(c[t]); if (x) { p += +x.prot || 0; k += +x.kcal || 0; } });
+    $("cv").innerHTML = barraFecha() + `
+      <section class="panel"><div class="macro"><div><b>${p}</b><span>g de proteína de ${META_P}</span><div class="barra"><i style="width:${Math.min(100, p / META_P * 100)}%"></i></div></div>
+        <div><b>${k}</b><span>kcal de ${META_K}</span><div class="barra"><i style="width:${Math.min(100, k / META_K * 100)}%;background:var(--warn)"></i></div></div></div></section>
+      <section class="panel"><h3>Comidas del día</h3><div class="col" style="gap:10px">${["D","L","C"].map(t => `<label class="f">${T[t]}<select data-com="${t}"><option value="">Sin elegir</option>${G("comidas").filter(x => x.t === t).map(x => `<option value="${esc(x.id)}"${c[t] === x.id ? " selected" : ""}>${esc(x.nombre)} (${x.prot} g)</option>`).join("")}</select></label>`).join("")}</div>
+        <p class="aviso" style="margin:10px 0 0">El agua, los suplementos y el gym ahora se registran en «Hoy». Aquí planeas qué comer y lo llevas al reporte como comidas completas.</p></section>`;
+  }
+  function vSem(){
+    const l = lunes();
+    $("cv").innerHTML = `<div class="row"><button class="btn pri" data-gen>Generar semana variada</button><span class="aviso">Semana del ${esc(fCorta(l))}. Reemplaza las comidas de lunes a domingo.</span></div>
+      <section class="panel">${[0,1,2,3,4,5,6].map(i => { const s = mas(l, i), c = diaDe(s).com || {}; let p = 0;
+        const tx = ["D","L","C"].map(t => { const x = com(c[t]); if (x) p += +x.prot || 0; return x ? esc(x.nombre) : "—"; }).join(" · ");
+        return `<div class="lin2"><span class="tx"><b>${esc(fCorta(s))}</b><small>${tx}</small></span><span class="mon">${p} g</span></div>`; }).join("")}</section>`;
+  }
+  function generar(){
+    const l = lunes(), baraja = t => { const a = G("comidas").filter(x => x.t === t).map(x => x.id); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+    const B = {D:baraja("D"), L:baraja("L"), C:baraja("C")};
+    for (let i = 0; i < 7; i++) { const s = mas(l, i); let d = DB.dias.find(x => x.id === s); if (!d) { d = {id:s}; DB.dias.push(d); }
+      d.com = {}; ["D","L","C"].forEach(t => { if (B[t].length) d.com[t] = B[t][i % B[t].length]; }); }
+    if (guardar("dias")) toast("Semana generada");
+  }
+  function vBanco(){
+    $("cv").innerHTML = `<button class="btn pri w" data-cn>Nueva comida</button>` + ["D","L","C"].map(t => `<section class="panel"><h3>${T[t]}</h3>${G("comidas").filter(x => x.t === t).map(x => `<div class="lin2"><span class="tx">${esc(x.nombre)}<small>${x.prot} g de proteína · ${x.kcal} kcal</small></span><button class="lk" data-ce="${esc(x.id)}">Editar</button></div>`).join("") || '<div class="aviso">Sin opciones.</div>'}</section>`).join("");
+  }
+  function vCompras(){
+    const l = G("compras"), tiendas = [...new Set(l.map(x => x.tienda || "Otra"))], falta = l.filter(x => !x.ok).reduce((s,x) => s + (+x.precio || 0), 0);
+    $("cv").innerHTML = `<section class="panel"><div class="cabp"><h3>Lista de compras</h3><button class="btn ch" data-cl>Desmarcar todo</button></div>
+        ${tiendas.map(t => `<div class="sub" style="margin-top:8px">${esc(t)}</div>` + l.filter(x => (x.tienda || "Otra") === t).map(x => `<div class="lin2"><label class="chk tx"><input type="checkbox" data-cok="${esc(x.id)}"${x.ok ? " checked" : ""}> ${esc(x.nombre)}</label><span class="mon">${dinero(x.precio)}</span><button class="lk" data-cdel="${esc(x.id)}" aria-label="Quitar">×</button></div>`).join("")).join("")}
+        <div class="sub" style="margin-top:10px">Falta por comprar: ${dinero(falta)}</div></section>
+      <section class="panel"><h3>Agregar a la lista</h3><div class="col" style="gap:8px"><input class="campo" id="kN" placeholder="Producto" autocomplete="off">
+        <div class="row"><input class="campo" id="kT" placeholder="Tienda" style="flex:1" autocomplete="off"><input class="campo" id="kP" type="number" min="0" placeholder="Precio" style="flex:1" inputmode="decimal"><button class="btn" data-ka>Añadir</button></div></div></section>`;
+  }
+  function hojaComida(id){
+    const x = id ? com(id) : {t:"D",nombre:"",prot:"",kcal:""}; if (!x) return;
+    abrir(cabeza(id ? "Editar comida" : "Nueva comida") + `<label class="f">Momento<select id="mT">${["D","L","C"].map(t => `<option value="${t}"${x.t === t ? " selected" : ""}>${T[t]}</option>`).join("")}</select></label>
+      <label class="f">Descripción<input id="mN" value="${esc(x.nombre)}" autocomplete="off"></label>
+      <div class="dos"><label class="f">Proteína (g)<input id="mP" type="number" min="0" inputmode="numeric" value="${esc(x.prot)}"></label><label class="f">Calorías<input id="mK" type="number" min="0" inputmode="numeric" value="${esc(x.kcal)}"></label></div>
+      <div class="row">${id ? '<button class="btn peligro" id="mDel">Eliminar</button>' : ""}<span style="flex:1"></span><button class="btn pri" id="mOk">Guardar</button></div>`);
+    $("mOk").onclick = () => { if (!$("mN").value.trim()) { toast("Escribe la descripción"); return; } const li = propio("comidas"), n = {id: id || "m" + nid(), t:$("mT").value, nombre:$("mN").value.trim(), prot:+$("mP").value || 0, kcal:+$("mK").value || 0};
+      const i = li.findIndex(y => y.id === n.id); if (i >= 0) li[i] = n; else li.push(n); cerrar(); if (guardar("comidas")) toast("Comida guardada"); };
+    if (id) dosPasos($("mDel"), () => { DB.comidas = propio("comidas").filter(y => y.id !== id); cerrar(); guardar("comidas"); });
+  }
+  function clicC(e){
+    if (clicFecha(e)) return; const q = s => e.target.closest(s); let b;
+    if (q("[data-gen]")) generar();
+    else if (q("[data-cn]")) hojaComida(null);
+    else if (b = q("[data-ce]")) hojaComida(b.dataset.ce);
+    else if (q("[data-cl]")) { propio("compras").forEach(x => x.ok = false); guardar("compras"); }
+    else if (b = q("[data-cdel]")) { DB.compras = propio("compras").filter(x => x.id !== b.dataset.cdel); guardar("compras"); }
+    else if (q("[data-ka]")) { const n = $("kN").value.trim(); if (!n) { toast("Escribe el producto"); return; } propio("compras").push({id:"k" + nid(), nombre:n, tienda:$("kT").value.trim() || "Otra", precio:+$("kP").value || 0, ok:false}); guardar("compras"); }
+  }
+  function cambioC(e){ const t = e.target, ds = t.dataset;
+    if (ds.com) diaCambia(fecha, d => { d.com = d.com || {}; d.com[ds.com] = t.value; });
+    else if (ds.cok) { const x = propio("compras").find(y => y.id === ds.cok); if (x) { x.ok = t.checked; guardar("compras"); } }
+  }
+  MOD.comida = {monta, pinta:pintaC};
 })();
 
 /* ---------------- VIDA (Hogar, Coches, Kerry, Salud) ---------------- */
